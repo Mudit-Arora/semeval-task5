@@ -23,6 +23,12 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+
 def create_prompt(sample: Dict[str, Any], verbose: bool = False) -> str:
     """
     Create a detailed reasoning prompt for the model to rate plausibility of a word sense.
@@ -128,7 +134,7 @@ def extract_rating(text: str) -> int:
 class OpenAIRater:
     """Rater using OpenAI models."""
     
-    def __init__(self, model: str = "gpt-4o", temperature: float = 0.3):
+    def __init__(self, model: str = "gpt-5.1", temperature: float = 0.3):
         if not OPENAI_AVAILABLE:
             raise ImportError("OpenAI library not available. Install with: pip install openai")
         
@@ -151,7 +157,7 @@ class OpenAIRater:
                     {"role": "user", "content": prompt}
                 ],
                 temperature=self.temperature,
-                max_tokens=50 if self.use_simple_prompt else 500
+                #max_tokens=50 if self.use_simple_prompt else 500
             )
             
             rating_text = response.choices[0].message.content.strip()
@@ -164,7 +170,7 @@ class OpenAIRater:
 class AnthropicRater:
     """Rater using Anthropic Claude models."""
     
-    def __init__(self, model: str = "claude-3-5-sonnet-20241022", temperature: float = 0.3):
+    def __init__(self, model: str = "claude-sonnet-4-5-20250929", temperature: float = 0.3):
         if not ANTHROPIC_AVAILABLE:
             raise ImportError("Anthropic library not available. Install with: pip install anthropic")
         
@@ -193,6 +199,39 @@ class AnthropicRater:
             print(f"Error calling Anthropic API: {e}")
             return 3
 
+class GeminiRater:
+    """Rater using Google Gemini models."""
+    
+    def __init__(self, model: str = "gemini-2.0-flash-exp", temperature: float = 0.3):
+        if not GEMINI_AVAILABLE:
+            raise ImportError("Google GenerativeAI library not available. Install with: pip install google-generativeai")
+        
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not api_key:
+            raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set")
+        
+        genai.configure(api_key=api_key)
+        self.model = genai.GenerativeModel(
+            model_name=model,
+            generation_config={
+                "temperature": temperature,
+                "max_output_tokens": 500,
+            }
+        )
+    
+    def get_rating(self, sample: Dict[str, Any]) -> int:
+        """Get plausibility rating from Gemini model."""
+        prompt = create_prompt(sample)
+        
+        try:
+            response = self.model.generate_content(prompt)
+            rating_text = response.text.strip()
+            return extract_rating(rating_text)
+            
+        except Exception as e:
+            print(f"Error calling Gemini API: {e}")
+            return 3
+
 def get_rater(provider: str, model: str, temperature: float):
     """Factory function to get appropriate rater."""
     provider = provider.lower()
@@ -201,14 +240,16 @@ def get_rater(provider: str, model: str, temperature: float):
         return OpenAIRater(model=model, temperature=temperature)
     elif provider == "anthropic":
         return AnthropicRater(model=model, temperature=temperature)
+    elif provider == "gemini":
+        return GeminiRater(model=model, temperature=temperature)
     else:
-        raise ValueError(f"Unsupported provider: {provider}. Choose 'openai' or 'anthropic'")
+        raise ValueError(f"Unsupported provider: {provider}. Choose 'openai', 'anthropic', or 'gemini'")
 
 def process_dataset(
     data_path: str,
     output_path: str,
     provider: str = "openai",
-    model: str = "gpt-4o",
+    model: str = "gpt-5.1",
     temperature: float = 0.3,
     max_samples: Optional[int] = None,
     delay: float = 0.1
@@ -262,10 +303,10 @@ def main():
     parser.add_argument('--output', type=str, default='input/res/predictions.jsonl',
                         help='Path to output predictions file')
     parser.add_argument('--provider', type=str, default='openai',
-                        choices=['openai', 'anthropic'],
+                        choices=['openai', 'anthropic', 'gemini'],
                         help='LLM provider to use')
-    parser.add_argument('--model', type=str, default='gpt-4o',
-                        help='Model to use (e.g., gpt-4o, gpt-4-turbo, claude-3-5-sonnet-20241022)')
+    parser.add_argument('--model', type=str, default='gpt-5.1',
+                        help='Model to use (e.g., gpt-4o, claude-3-5-sonnet-20241022, gemini-2.0-flash-exp)')
     parser.add_argument('--temperature', type=float, default=0.3,
                         help='Temperature for model sampling')
     parser.add_argument('--max-samples', type=int, default=None,
@@ -284,6 +325,11 @@ def main():
     if args.provider == "anthropic" and not os.environ.get("ANTHROPIC_API_KEY"):
         print("Error: ANTHROPIC_API_KEY environment variable not set")
         print("Please set it with: export ANTHROPIC_API_KEY='your-api-key'")
+        return
+    
+    if args.provider == "gemini" and not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
+        print("Error: GEMINI_API_KEY or GOOGLE_API_KEY environment variable not set")
+        print("Please set it with: export GEMINI_API_KEY='your-api-key'")
         return
     
     # Process dataset
