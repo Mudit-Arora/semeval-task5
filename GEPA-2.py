@@ -13,3 +13,17 @@ class GEPA:
         if dist <= std:
             reward += 0.25
         return reward
+    def reflect(self, pred, mean, std):
+        reflection_prompt = f"""
+You predicted {pred}.
+Human mean: {mean}
+Human std: {std}
+"""
+         return self.llm(reflection_prompt)
+
+    def adapt_prompt(self, base_prompt, reflection):
+        return base_prompt + "\n\nGuidance based on prior errors:\n" + reflection
+
+#Training loop
+
+
