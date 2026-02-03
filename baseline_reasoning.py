@@ -134,38 +134,48 @@ def extract_rating(text: str) -> int:
 class OpenAIRater:
     """Rater using OpenAI models."""
     
-    def __init__(self, model: str = "gpt-5.1", temperature: float = 0.3):
+    def __init__(self, model: str = "gpt-5.1", temperature: float = 0.3, num_runs: int = 5):
         if not OPENAI_AVAILABLE:
             raise ImportError("OpenAI library not available. Install with: pip install openai")
         
         self.client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
         self.model = model
         self.temperature = temperature
+        self.num_runs = num_runs
         
         # Use simple prompt for faster models
         self.use_simple_prompt = "gpt-3.5" in model.lower()
     
     def get_rating(self, sample: Dict[str, Any]) -> int:
-        """Get plausibility rating from OpenAI model."""
+        """Get plausibility rating from OpenAI model by averaging multiple runs."""
         prompt = create_simple_prompt(sample) if self.use_simple_prompt else create_prompt(sample)
         
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are an expert at understanding nuanced word meanings and evaluating their plausibility in narrative contexts."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=self.temperature,
-                #max_tokens=50 if self.use_simple_prompt else 500
-            )
-            
-            rating_text = response.choices[0].message.content.strip()
-            return extract_rating(rating_text)
-            
-        except Exception as e:
-            print(f"Error calling OpenAI API: {e}")
-            return 3
+        ratings = []
+        for run in range(self.num_runs):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": "You are an expert at understanding nuanced word meanings and evaluating their plausibility in narrative contexts."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=self.temperature,
+                    #max_tokens=50 if self.use_simple_prompt else 500
+                )
+                
+                rating_text = response.choices[0].message.content.strip()
+                rating = extract_rating(rating_text)
+                ratings.append(rating)
+                
+            except Exception as e:
+                print(f"Error calling OpenAI API (run {run + 1}): {e}")
+                ratings.append(3)  # Fallback rating
+        
+        # Calculate average and round to nearest integer
+        avg_rating = round(sum(ratings) / len(ratings))
+        # Ensure rating is within valid range [1, 5]
+        avg_rating = max(1, min(5, avg_rating))
+        return avg_rating
 
 class AnthropicRater:
     """Rater using Anthropic Claude models."""
@@ -232,12 +242,12 @@ class GeminiRater:
             print(f"Error calling Gemini API: {e}")
             return 3
 
-def get_rater(provider: str, model: str, temperature: float):
+def get_rater(provider: str, model: str, temperature: float, num_runs: int = 5):
     """Factory function to get appropriate rater."""
     provider = provider.lower()
     
     if provider == "openai":
-        return OpenAIRater(model=model, temperature=temperature)
+        return OpenAIRater(model=model, temperature=temperature, num_runs=num_runs)
     elif provider == "anthropic":
         return AnthropicRater(model=model, temperature=temperature)
     elif provider == "gemini":
@@ -252,17 +262,19 @@ def process_dataset(
     model: str = "gpt-5.1",
     temperature: float = 0.3,
     max_samples: Optional[int] = None,
-    delay: float = 0.1
+    delay: float = 0.1,
+    num_runs: int = 5
 ):
     """
     Process entire dataset and generate predictions.
+    For OpenAI, runs each sample num_runs times and averages the scores.
     """
     # Load data
     with open(data_path, 'r') as f:
         data = json.load(f)
     
     # Initialize rater
-    rater = get_rater(provider, model, temperature)
+    rater = get_rater(provider, model, temperature, num_runs=num_runs)
     
     predictions = []
     
@@ -271,7 +283,7 @@ def process_dataset(
     if max_samples:
         samples = samples[:max_samples]
     
-    print(f"Processing {len(samples)} samples with {provider}/{model}...")
+    print(f"Processing {len(samples)} samples with {provider}/{model} (temperature={temperature}, num_runs={num_runs})...")
     
     for idx, (sample_id, sample) in enumerate(tqdm(samples)):
         rating = rater.get_rating(sample)
@@ -313,6 +325,8 @@ def main():
                         help='Maximum number of samples to process (for testing)')
     parser.add_argument('--delay', type=float, default=0.1,
                         help='Delay between API calls (seconds)')
+    parser.add_argument('--num-runs', type=int, default=5,
+                        help='Number of times to run each sample and average (default: 5)')
     
     args = parser.parse_args()
     
@@ -340,7 +354,8 @@ def main():
         model=args.model,
         temperature=args.temperature,
         max_samples=args.max_samples,
-        delay=args.delay
+        delay=args.delay,
+        num_runs=args.num_runs
     )
 
 if __name__ == "__main__":
