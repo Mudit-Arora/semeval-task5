@@ -19,7 +19,7 @@ class GEPA:
             Human mean: {mean}
             Human std: {std}
             """
-         return self.llm(reflection_prompt)
+        return self.llm(reflection_prompt)
 
     def adapt_prompt(self, base_prompt, reflection):
         return base_prompt + "\n\nGuidance based on prior errors:\n" + reflection
